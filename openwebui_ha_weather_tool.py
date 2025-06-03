@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 
 class Tools:
     class Valves(BaseModel):
+        """
+        Configuration valves for Open WebUI Home Assistant Weather Tool.
+        """
         HA_URL: str = Field(
             default="https://my-home-assistant.local:8123",
             description="URL of the home assistant instance.",
@@ -35,11 +38,10 @@ class Tools:
         self.valves = self.Valves()
         pass
 
-    # Add your custom tools using pure Python code here, make sure to add type hints and descriptions
-
-    def get_hourly_weather_forecast(self) -> str:
+    # Get the current forecast from home assistant.
+    def get_current_weather_forecast(self) -> str:
         """
-        Get the current hourly forecast from home assistant.
+        Get the current weather forecast from home assistant.
         """
 
         # Ensure the valves are initialized
@@ -60,6 +62,8 @@ class Tools:
             current_url = f"{HA_URL}/api/states/{HA_CURRENT_SENSOR_NAME}"
             current_range_url = f"{HA_URL}/api/states/{HA_RANGE_SENSOR_NAME}"
 
+            # Make requests to the Home Assistant API for all current and forecast data, 
+            # if you're forking this code you'll need to ensure that the attribute names are correct.
             response = requests.get(hourly_forecast_url, headers=headers)
             hourly_forecast_data = response.json()
 
@@ -81,7 +85,8 @@ class Tools:
             if not hourly_forecast:
                 return json.dumps({"error": "No forecast data available."})
 
-            # Prepare the result
+            # Prepare the result, this will need to be adapted to suit the weather data collected by your 
+            # Home Assistant instance.
             result = {
                 "current_weather": {
                     "temperature": current.get("temperature"),
