@@ -3,8 +3,12 @@ import requests
 import json
 from pydantic import BaseModel, Field
 
-
+# Open WebUI Home Assistant Weather Tool
 class Tools:
+    """
+    Open WebUI Home Assistant Weather Tool for fetching weather data from Home Assistant.
+    """
+    
     class Valves(BaseModel):
         """
         Configuration valves for Open WebUI Home Assistant Weather Tool.
