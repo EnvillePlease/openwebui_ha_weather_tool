@@ -42,13 +42,33 @@ class Tools:
         self.valves = self.Valves()
         pass
 
-    # Get the current forecast from home assistant.
+    def _fetch_sensor_data(self, url, headers, sensor_name):
+        """
+        Fetch sensor data from Home Assistant API.
+
+        Args:
+            url (_type_): URL of the Home Assistant API endpoint for the sensor.
+            headers (_type_): Headers for the API request, including authorization.
+            sensor_name (_type_): Name of the sensor to fetch data for.
+
+        Returns:
+            _type_: _description_
+        """
+        try:
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code != 200:
+                return None, f"Sensor '{sensor_name}' not found or API error (status {response.status_code})."
+            try:
+                return response.json(), None
+            except json.JSONDecodeError:
+                return None, f"Invalid JSON from sensor '{sensor_name}'."
+        except requests.RequestException as e:
+            return None, f"Network error fetching '{sensor_name}': {str(e)}"
+
     def get_current_weather_forecast(self) -> str:
         """
         Get the current weather forecast from home assistant.
         """
-
-        # Ensure the valves are initialized
         HA_URL = self.valves.HA_URL
         HA_API_TOKEN = self.valves.HA_API_TOKEN
         HA_HOURLY_FORECAST_SENSOR_NAME = self.valves.HA_HOURLY_FORECAST_SENSOR_NAME
@@ -56,66 +76,59 @@ class Tools:
         HA_CURRENT_SENSOR_NAME = self.valves.HA_CURRENT_SENSOR_NAME
         HA_RANGE_SENSOR_NAME = self.valves.HA_RANGE_SENSOR_NAME
 
+        headers = {"Authorization": f"Bearer {HA_API_TOKEN}"}
+
+        sensor_urls = {
+            "hourly_forecast": (f"{HA_URL}/api/states/{HA_HOURLY_FORECAST_SENSOR_NAME}", HA_HOURLY_FORECAST_SENSOR_NAME),
+            "daily_forecast": (f"{HA_URL}/api/states/{HA_DAILY_FORECAST_SENSOR_NAME}", HA_DAILY_FORECAST_SENSOR_NAME),
+            "current": (f"{HA_URL}/api/states/{HA_CURRENT_SENSOR_NAME}", HA_CURRENT_SENSOR_NAME),
+            "current_range": (f"{HA_URL}/api/states/{HA_RANGE_SENSOR_NAME}", HA_RANGE_SENSOR_NAME),
+        }
+
+        data = {}
+        for key, (url, name) in sensor_urls.items():
+            if not name:
+                return json.dumps({"error": f"Sensor name for '{key}' is not set."})
+            d, err = self._fetch_sensor_data(url, headers, name)
+            if err:
+                return json.dumps({"error": err})
+            data[key] = d
+
         try:
-            # Fetch forecast data from Home Assistant
-            headers = {"Authorization": f"Bearer {HA_API_TOKEN}"}
-            hourly_forecast_url = (
-                f"{HA_URL}/api/states/{HA_HOURLY_FORECAST_SENSOR_NAME}"
-            )
-            daily_forecast_url = f"{HA_URL}/api/states/{HA_DAILY_FORECAST_SENSOR_NAME}"
-            current_url = f"{HA_URL}/api/states/{HA_CURRENT_SENSOR_NAME}"
-            current_range_url = f"{HA_URL}/api/states/{HA_RANGE_SENSOR_NAME}"
+            hourly_forecast = data["hourly_forecast"].get("attributes", {}).get("forecast", [])
+            daily_forecast = data["daily_forecast"].get("attributes", {}).get("forecast", [])
+            current = data["current"].get("attributes", {})
+            current_range = data["current_range"].get("attributes", {})
+        except Exception as e:
+            return json.dumps({"error": f"Error extracting attributes: {str(e)}"})
 
-            # Make requests to the Home Assistant API for all current and forecast data, 
-            # if you're forking this code you'll need to ensure that the attribute names are correct.
-            response = requests.get(hourly_forecast_url, headers=headers)
-            hourly_forecast_data = response.json()
+        if not hourly_forecast:
+            return json.dumps({"error": "No hourly forecast data available."})
+        if not daily_forecast:
+            return json.dumps({"error": "No daily forecast data available."})
 
-            response = requests.get(daily_forecast_url, headers=headers)
-            daily_forecast_data = response.json()
-
-            response = requests.get(current_url, headers=headers)
-            current_data = response.json()
-
-            response = requests.get(current_range_url, headers=headers)
-            current_range_data = response.json()
-
-            hourly_forecast = hourly_forecast_data["attributes"]["forecast"]
-            daily_forecast = daily_forecast_data["attributes"]["forecast"]
-            current = current_data["attributes"]
-            current_range = current_range_data["attributes"]
-
-            # Check if forecast data is available
-            if not hourly_forecast:
-                return json.dumps({"error": "No forecast data available."})
-
-            # Prepare the result, this will need to be adapted to suit the weather data collected by your 
-            # Home Assistant instance.
-            result = {
-                "current_weather": {
-                    "temperature": current.get("temperature"),
-                    "humidity": current.get("humidity"),
-                    "pressure": current.get("pressure"),
-                    "lux": current.get("lx"),
-                    "current_weather_ranges": {
-                        "temperature_high": current_range.get("max_temperature"),
-                        "temperature_low": current_range.get("min_temperature"),
-                        "temperature_average": current_range.get("avg_temperature"),
-                        "humidity_high": current_range.get("max_humidity"),
-                        "humidity_low": current_range.get("min_humidity"),
-                        "humidity_average": current_range.get("avg_humidity"),
-                        "pressure_high": current_range.get("max_pressure"),
-                        "pressure_low": current_range.get("min_pressure"),
-                        "pressure_average": current_range.get("avg_pressure"),
-                    },
+        result = {
+            "current_weather_readings": {
+                "temperature": current.get("temperature"),
+                "humidity": current.get("humidity"),
+                "pressure": current.get("pressure"),
+                "lux": current.get("lx"),
+                "current_weather_maximum_minimum_ranges": {
+                    "temperature_high": current_range.get("max_temperature"),
+                    "temperature_low": current_range.get("min_temperature"),
+                    "temperature_average": current_range.get("avg_temperature"),
+                    "humidity_high": current_range.get("max_humidity"),
+                    "humidity_low": current_range.get("min_humidity"),
+                    "humidity_average": current_range.get("avg_humidity"),
+                    "pressure_high": current_range.get("max_pressure"),
+                    "pressure_low": current_range.get("min_pressure"),
+                    "pressure_average": current_range.get("avg_pressure"),
                 },
-                "forecast": {
-                    "hourly_forecast": hourly_forecast,
-                    "daily_forecast": daily_forecast,
-                },
-            }
+            },
+            "weather_forecast": {
+                "hourly_weather_forecast": hourly_forecast,
+                "daily_weather_forecast": daily_forecast,
+            },
+        }
 
-            # Return the forecast data as a JSON string
-            return json.dumps(json.dumps(result))
-        except requests.RequestException as e:  # Handle network-related errors
-            return json.dumps({"error": f"Error fetching weather data: {str(e)}"})
+        return json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True)
