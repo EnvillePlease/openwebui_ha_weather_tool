@@ -3,16 +3,18 @@ import requests
 import json
 from pydantic import BaseModel, Field
 
+
 # Open WebUI Home Assistant Weather Tool
 class Tools:
     """
     Open WebUI Home Assistant Weather Tool for fetching weather data from Home Assistant.
     """
-    
+
     class Valves(BaseModel):
         """
         Configuration valves for Open WebUI Home Assistant Weather Tool.
         """
+
         HA_URL: str = Field(
             default="https://my-home-assistant.local:8123",
             description="URL of the home assistant instance.",
@@ -57,7 +59,10 @@ class Tools:
         try:
             response = requests.get(url, headers=headers, timeout=10)
             if response.status_code != 200:
-                return None, f"Sensor '{sensor_name}' not found or API error (status {response.status_code})."
+                return (
+                    None,
+                    f"Sensor '{sensor_name}' not found or API error (status {response.status_code}).",
+                )
             try:
                 return response.json(), None
             except json.JSONDecodeError:
@@ -79,10 +84,22 @@ class Tools:
         headers = {"Authorization": f"Bearer {HA_API_TOKEN}"}
 
         sensor_urls = {
-            "hourly_forecast": (f"{HA_URL}/api/states/{HA_HOURLY_FORECAST_SENSOR_NAME}", HA_HOURLY_FORECAST_SENSOR_NAME),
-            "daily_forecast": (f"{HA_URL}/api/states/{HA_DAILY_FORECAST_SENSOR_NAME}", HA_DAILY_FORECAST_SENSOR_NAME),
-            "current": (f"{HA_URL}/api/states/{HA_CURRENT_SENSOR_NAME}", HA_CURRENT_SENSOR_NAME),
-            "current_range": (f"{HA_URL}/api/states/{HA_RANGE_SENSOR_NAME}", HA_RANGE_SENSOR_NAME),
+            "hourly_forecast": (
+                f"{HA_URL}/api/states/{HA_HOURLY_FORECAST_SENSOR_NAME}",
+                HA_HOURLY_FORECAST_SENSOR_NAME,
+            ),
+            "daily_forecast": (
+                f"{HA_URL}/api/states/{HA_DAILY_FORECAST_SENSOR_NAME}",
+                HA_DAILY_FORECAST_SENSOR_NAME,
+            ),
+            "current": (
+                f"{HA_URL}/api/states/{HA_CURRENT_SENSOR_NAME}",
+                HA_CURRENT_SENSOR_NAME,
+            ),
+            "current_range": (
+                f"{HA_URL}/api/states/{HA_RANGE_SENSOR_NAME}",
+                HA_RANGE_SENSOR_NAME,
+            ),
         }
 
         data = {}
@@ -95,8 +112,12 @@ class Tools:
             data[key] = d
 
         try:
-            hourly_forecast = data["hourly_forecast"].get("attributes", {}).get("forecast", [])
-            daily_forecast = data["daily_forecast"].get("attributes", {}).get("forecast", [])
+            hourly_forecast = (
+                data["hourly_forecast"].get("attributes", {}).get("forecast", [])
+            )
+            daily_forecast = (
+                data["daily_forecast"].get("attributes", {}).get("forecast", [])
+            )
             current = data["current"].get("attributes", {})
             current_range = data["current_range"].get("attributes", {})
         except Exception as e:
