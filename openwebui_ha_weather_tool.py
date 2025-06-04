@@ -2,12 +2,13 @@
 # Script Name : openwebui_ha_weather_tool.py
 # Author      : Clark Nelson
 # Company     : CNSoft OnLine
-# Version     : 1.0.0
+# Version     : 1.0.1
 # -----------------------------------------------------------------------------
 
 import os
 import requests
 import json
+import logging
 from pydantic import BaseModel, Field
 
 
@@ -81,55 +82,49 @@ class Tools:
         """
         Get the current weather forecast from home assistant.
         """
-        HA_URL = self.valves.HA_URL
-        HA_API_TOKEN = self.valves.HA_API_TOKEN
-        HA_HOURLY_FORECAST_SENSOR_NAME = self.valves.HA_HOURLY_FORECAST_SENSOR_NAME
-        HA_DAILY_FORECAST_SENSOR_NAME = self.valves.HA_DAILY_FORECAST_SENSOR_NAME
-        HA_CURRENT_SENSOR_NAME = self.valves.HA_CURRENT_SENSOR_NAME
-        HA_RANGE_SENSOR_NAME = self.valves.HA_RANGE_SENSOR_NAME
+        v = self.valves
 
-        headers = {"Authorization": f"Bearer {HA_API_TOKEN}"}
+        # Early validation
+        if not v.HA_URL:
+            return json.dumps({"error": "HA_URL is not set."})
+        if not v.HA_API_TOKEN:
+            return json.dumps({"error": "HA_API_TOKEN is not set."})
 
-        sensor_urls = {
-            "hourly_forecast": (
-                f"{HA_URL}/api/states/{HA_HOURLY_FORECAST_SENSOR_NAME}",
-                HA_HOURLY_FORECAST_SENSOR_NAME,
-            ),
-            "daily_forecast": (
-                f"{HA_URL}/api/states/{HA_DAILY_FORECAST_SENSOR_NAME}",
-                HA_DAILY_FORECAST_SENSOR_NAME,
-            ),
-            "current": (
-                f"{HA_URL}/api/states/{HA_CURRENT_SENSOR_NAME}",
-                HA_CURRENT_SENSOR_NAME,
-            ),
-            "current_range": (
-                f"{HA_URL}/api/states/{HA_RANGE_SENSOR_NAME}",
-                HA_RANGE_SENSOR_NAME,
-            ),
+        headers = {"Authorization": f"Bearer {v.HA_API_TOKEN}"}
+
+        sensor_names = {
+            "hourly_forecast": v.HA_HOURLY_FORECAST_SENSOR_NAME,
+            "daily_forecast": v.HA_DAILY_FORECAST_SENSOR_NAME,
+            "current": v.HA_CURRENT_SENSOR_NAME,
+            "current_range": v.HA_RANGE_SENSOR_NAME,
         }
 
         data = {}
-        for key, (url, name) in sensor_urls.items():
+        for key, name in sensor_names.items():
             if not name:
                 return json.dumps({"error": f"Sensor name for '{key}' is not set."})
+            url = f"{v.HA_URL}/api/states/{name}"
             d, err = self._fetch_sensor_data(url, headers, name)
             if err:
+                logging.error(f"Error fetching {key}: {err}")
                 return json.dumps({"error": err})
             data[key] = d
 
         try:
-            hourly_forecast = (
-                data["hourly_forecast"].get("attributes", {}).get("forecast", [])
-            )
-            daily_forecast = (
-                data["daily_forecast"].get("attributes", {}).get("forecast", [])
-            )
+            # Check if all required keys are present in the data.
+            for key in ["hourly_forecast", "daily_forecast", "current", "current_range"]:
+                if data.get(key) is None:
+                    return json.dumps({"error": f"No data returned for '{key}' sensor."})
+
+            hourly_forecast = data["hourly_forecast"].get("attributes", {}).get("forecast", [])
+            daily_forecast = data["daily_forecast"].get("attributes", {}).get("forecast", [])
             current = data["current"].get("attributes", {})
             current_range = data["current_range"].get("attributes", {})
-        except Exception as e:
+        except Exception as e: # Catch any exception during attribute extraction
+            logging.exception("Error extracting attributes")
             return json.dumps({"error": f"Error extracting attributes: {str(e)}"})
 
+        # Validate the structure of the forecast data
         if not hourly_forecast:
             return json.dumps({"error": "No hourly forecast data available."})
         if not daily_forecast:
