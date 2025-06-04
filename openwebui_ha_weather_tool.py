@@ -1,3 +1,10 @@
+# -----------------------------------------------------------------------------
+# Script Name : openwebui_ha_weather_tool.py
+# Author      : Clark Nelson
+# Company     : CNSoft OnLine
+# Version     : 1.0.0
+# -----------------------------------------------------------------------------
+
 import os
 import requests
 import json
