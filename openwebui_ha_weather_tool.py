@@ -2,7 +2,7 @@
 # Script Name : openwebui_ha_weather_tool.py
 # Author      : Clark Nelson
 # Company     : CNSoft OnLine
-# Version     : 1.0.2
+# Version     : 1.0.3
 # -----------------------------------------------------------------------------
 
 import os
@@ -189,27 +189,28 @@ class Tools:
         result = {
             "current_date_time": current_date_time,
             "current_timezone": v.HA_TIMEZONE,
-            "current_weather_readings": {
-                "temperature": current.get("temperature"),
-                "humidity": current.get("humidity"),
-                "pressure": current.get("pressure"),
-                "lux": current.get("lx"),
-                "current_weather_maximum_minimum_ranges": {
+            "current_weather": {
+                "temperatures": {
+                    "temperature": current.get("temperature"),
                     "temperature_high": current_range.get("max_temperature"),
-                    "temperature_low": current_range.get("min_temperature"),
-                    "temperature_average": current_range.get("avg_temperature"),
-                    "humidity_high": current_range.get("max_humidity"),
-                    "humidity_low": current_range.get("min_humidity"),
-                    "humidity_average": current_range.get("avg_humidity"),
-                    "pressure_high": current_range.get("max_pressure"),
-                    "pressure_low": current_range.get("min_pressure"),
-                    "pressure_average": current_range.get("avg_pressure"),
+                    "temperature_low": current_range.get("min_temperature")
                 },
-            },
-            "weather_forecast": {
-                "hourly_weather_forecast": hourly_forecast,
-                "daily_weather_forecast": daily_forecast,
-            },
+                "humidities": {
+                    "humidity": current.get("humidity"),
+                    "humidity_high": current_range.get("max_humidity"),
+                    "humidity_low": current_range.get("min_humidity")
+                },
+                "pressures": {
+                    "pressure": current.get("pressure"),
+                    "pressure_high": current_range.get("max_pressure"),
+                    "pressure_low": current_range.get("min_pressure")
+                },
+                "lux": current.get("lx"),
+                "forecast": {
+                    "hourly_forecast": hourly_forecast,
+                    "daily_forecast": daily_forecast,
+                }
+            }
         }
 
-        return json.dumps(result, indent=2, ensure_ascii=False, sort_keys=True)
+        return json.dumps(result, indent=None, ensure_ascii=True)
