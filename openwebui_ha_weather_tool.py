@@ -2,7 +2,7 @@
 # Script Name : openwebui_ha_weather_tool.py
 # Author      : Clark Nelson
 # Company     : CNSoft OnLine
-# Version     : 1.0.3
+# Version     : 1.0.4
 # -----------------------------------------------------------------------------
 
 import os
@@ -12,6 +12,8 @@ import logging
 from pydantic import BaseModel, Field
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import httpx
+import asyncio
 
 
 # Open WebUI Home Assistant Weather Tool
@@ -57,14 +59,14 @@ class Tools:
             default="Europe/London",
             description="Home Assistant timezone, used for formatting dates and times in the weather data.",
         )
-        
+
     def __init__(self):
         self.valves = self.Valves()
         pass
 
-    def _fetch_sensor_data(self, url, headers, sensor_name):
+    async def _fetch_sensor_data_async(self, url, headers, sensor_name):
         """
-        Fetch sensor data from Home Assistant API.
+        Asynchronously fetch sensor data from Home Assistant API.
 
         Args:
             url (_type_): URL of the Home Assistant API endpoint for the sensor.
@@ -75,7 +77,8 @@ class Tools:
             _type_: _description_
         """
         try:
-            response = requests.get(url, headers=headers, timeout=10)
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.get(url, headers=headers)
             if response.status_code != 200:
                 return (
                     None,
@@ -83,9 +86,9 @@ class Tools:
                 )
             try:
                 return response.json(), None
-            except json.JSONDecodeError:
+            except Exception:
                 return None, f"Invalid JSON from sensor '{sensor_name}'."
-        except requests.RequestException as e:
+        except Exception as e:
             return None, f"Network error fetching '{sensor_name}': {str(e)}"
 
     def _localize_forecast_times(self, forecast_list, timezone_str):
@@ -108,23 +111,25 @@ class Tools:
                         dt = dt.replace(tzinfo=tz)
                         entry[key] = dt.isoformat()
                     except Exception as e:
-                        logging.warning(f"Could not parse or encode timezone for forecast {key}: {e}")
+                        logging.warning(
+                            f"Could not parse or encode timezone for forecast {key}: {e}"
+                        )
         return forecast_list
 
-    def get_current_weather_forecast(self) -> str:
+    async def get_current_weather_forecast_async(self) -> str:
         """
-        Get the current weather forecast from home assistant.
+        Asynchronously get the current weather forecast from home assistant.
+        Returns:
+            str: JSON string containing the current weather forecast data.
         """
         v = self.valves
 
-        # Early validation
         if not v.HA_URL:
             return json.dumps({"error": "HA_URL is not set."})
         if not v.HA_API_TOKEN:
             return json.dumps({"error": "HA_API_TOKEN is not set."})
 
         headers = {"Authorization": f"Bearer {v.HA_API_TOKEN}"}
-
         sensor_names = {
             "hourly_forecast": v.HA_HOURLY_FORECAST_SENSOR_NAME,
             "daily_forecast": v.HA_DAILY_FORECAST_SENSOR_NAME,
@@ -133,12 +138,19 @@ class Tools:
             "current_date_time": v.HA_CURRENT_DATE_TIME_SENSOR_NAME,
         }
 
-        data = {}
+        # Build a list of tasks to fetch sensor data asynchronously.
+        tasks = []
         for key, name in sensor_names.items():
             if not name:
                 return json.dumps({"error": f"Sensor name for '{key}' is not set."})
             url = f"{v.HA_URL}/api/states/{name}"
-            d, err = self._fetch_sensor_data(url, headers, name)
+            tasks.append(self._fetch_sensor_data_async(url, headers, name))
+
+        # Use asyncio.gather to run all tasks concurrently.
+        results = await asyncio.gather(*tasks)
+        data = {}
+        # Enumerate through the results and handle errors.
+        for (key, _), (d, err) in zip(sensor_names.items(), results):
             if err:
                 logging.error(f"Error fetching {key}: {err}")
                 return json.dumps({"error": err})
@@ -146,12 +158,24 @@ class Tools:
 
         try:
             # Check if all required keys are present in the data.
-            for key in ["hourly_forecast", "daily_forecast", "current", "current_range", "current_date_time"]:
+            for key in [
+                "hourly_forecast",
+                "daily_forecast",
+                "current",
+                "current_range",
+                "current_date_time",
+            ]:
                 if data.get(key) is None:
-                    return json.dumps({"error": f"No data returned for '{key}' sensor."})
+                    return json.dumps(
+                        {"error": f"No data returned for '{key}' sensor."}
+                    )
 
-            hourly_forecast = data["hourly_forecast"].get("attributes", {}).get("forecast", [])
-            daily_forecast = data["daily_forecast"].get("attributes", {}).get("forecast", [])
+            hourly_forecast = (
+                data["hourly_forecast"].get("attributes", {}).get("forecast", [])
+            )
+            daily_forecast = (
+                data["daily_forecast"].get("attributes", {}).get("forecast", [])
+            )
             current = data["current"].get("attributes", {})
             current_range = data["current_range"].get("attributes", {})
             current_date_time_str = data["current_date_time"].get("state")
@@ -168,15 +192,21 @@ class Tools:
                     dt = dt.replace(tzinfo=ZoneInfo(v.HA_TIMEZONE))
                     current_date_time = dt.isoformat()
                 except Exception as e:
-                    logging.warning(f"Could not parse or encode timezone for current_date_time: {e}")
+                    logging.warning(
+                        f"Could not parse or encode timezone for current_date_time: {e}"
+                    )
                     current_date_time = current_date_time_str
             # --- end robust date parsing ---
 
             # Localize forecast datetimes
-            hourly_forecast = self._localize_forecast_times(hourly_forecast, v.HA_TIMEZONE)
-            daily_forecast = self._localize_forecast_times(daily_forecast, v.HA_TIMEZONE)
+            hourly_forecast = self._localize_forecast_times(
+                hourly_forecast, v.HA_TIMEZONE
+            )
+            daily_forecast = self._localize_forecast_times(
+                daily_forecast, v.HA_TIMEZONE
+            )
 
-        except Exception as e: # Catch any exception during attribute extraction
+        except Exception as e:  # Catch any exception during attribute extraction
             logging.exception("Error extracting attributes")
             return json.dumps({"error": f"Error extracting attributes: {str(e)}"})
 
@@ -193,24 +223,24 @@ class Tools:
                 "temperatures": {
                     "temperature": current.get("temperature"),
                     "temperature_high": current_range.get("max_temperature"),
-                    "temperature_low": current_range.get("min_temperature")
+                    "temperature_low": current_range.get("min_temperature"),
                 },
                 "humidities": {
                     "humidity": current.get("humidity"),
                     "humidity_high": current_range.get("max_humidity"),
-                    "humidity_low": current_range.get("min_humidity")
+                    "humidity_low": current_range.get("min_humidity"),
                 },
                 "pressures": {
                     "pressure": current.get("pressure"),
                     "pressure_high": current_range.get("max_pressure"),
-                    "pressure_low": current_range.get("min_pressure")
+                    "pressure_low": current_range.get("min_pressure"),
                 },
                 "lux": current.get("lx"),
                 "forecast": {
                     "hourly_forecast": hourly_forecast,
                     "daily_forecast": daily_forecast,
-                }
-            }
+                },
+            },
         }
 
         return json.dumps(result, indent=None, ensure_ascii=True)
