@@ -2,7 +2,7 @@
 # Script Name : openwebui_ha_weather_tool.py
 # Author      : Clark Nelson
 # Company     : CNSoft OnLine
-# Version     : 1.0.4
+# Version     : 1.0.5
 # -----------------------------------------------------------------------------
 
 import os
@@ -14,7 +14,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import httpx
 import asyncio
-
 
 # Open WebUI Home Assistant Weather Tool
 class Tools:
