@@ -3,3 +3,4 @@
 /lib
 /pyvenv.cfg
 testrig.py
+.DS_Store
