@@ -2,57 +2,63 @@
 # Script Name : openwebui_ha_weather_tool.py
 # Author      : Clark Nelson
 # Company     : CNSoft OnLine
-# Version     : 1.0.6
+# Version     : 1.0.7
 # -----------------------------------------------------------------------------
 
-import os
-import requests
 import json
 import logging
-from pydantic import BaseModel, Field
 from datetime import datetime
-from zoneinfo import ZoneInfo
+from typing import Any, Dict, List, Optional, Tuple
+
 import httpx
 import asyncio
+from pydantic import BaseModel, Field
+from zoneinfo import ZoneInfo
 
-# Open WebUI Home Assistant Weather Tool
+# Configure minimal logging for debugging and errors
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
 class Tools:
     """
     Open WebUI Home Assistant Weather Tool for fetching weather data from Home Assistant.
+
+    Notes:
+    - Methods are async where network IO is required.
+    - Returns JSON strings for easy integration with systems expecting text payloads.
     """
 
     class Valves(BaseModel):
-        """
-        Configuration valves for Open WebUI Home Assistant Weather Tool.
-        """
+        """Configuration valves for Open WebUI Home Assistant Weather Tool."""
 
         HA_URL: str = Field(
             default="https://my-home-assistant.local:8123",
-            description="URL of the home assistant instance.",
+            description="URL of the Home Assistant instance.",
         )
         HA_API_TOKEN: str = Field(
             default="",
-            description="Long lived API token to give Open WebUI access to home assistant.",
+            description="Long lived API token to give Open WebUI access to Home Assistant.",
         )
         HA_HOURLY_FORECAST_SENSOR_NAME: str = Field(
             default="",
-            description="Name of the sensor in home assistant that contains the hourly forecast data.",
+            description="Name of the sensor in Home Assistant that contains the hourly forecast data.",
         )
         HA_DAILY_FORECAST_SENSOR_NAME: str = Field(
             default="",
-            description="Name of the sensor in home assistant that contains the daily forecast data.",
+            description="Name of the sensor in Home Assistant that contains the daily forecast data.",
         )
         HA_CURRENT_SENSOR_NAME: str = Field(
             default="",
-            description="Name of the sensor in home assistant that contains the current weather data.",
+            description="Name of the sensor in Home Assistant that contains the current weather data.",
         )
         HA_RANGE_SENSOR_NAME: str = Field(
             default="",
-            description="Name of the sensor in home assistant that contains the weather ranges data.",
+            description="Name of the sensor in Home Assistant that contains the weather ranges data.",
         )
         HA_CURRENT_DATE_TIME_SENSOR_NAME: str = Field(
             default="",
-            description="Name of the sensor in home assistant that contains the current date and time.",
+            description="Name of the sensor in Home Assistant that contains the current date and time.",
         )
         HA_TIMEZONE: str = Field(
             default="Europe/London",
@@ -62,77 +68,142 @@ class Tools:
             default="96 Pooley View, Polesworth, Warwickshire, UK",
             description="Home Assistant location, used for displaying the weather data.",
         )
-        
-    def __init__(self):
-        self.valves = self.Valves()
-        pass
+        # New valves: units for display/concatenation
+        HA_TEMPERATURE_UNIT: str = Field(
+            default="°C",
+            description="Unit string to append to temperature readings (e.g. '°C').",
+        )
+        HA_HUMIDITY_UNIT: str = Field(
+            default="%",
+            description="Unit string to append to humidity readings (e.g. '%').",
+        )
+        HA_PRESSURE_UNIT: str = Field(
+            default="hPa",
+            description="Unit string to append to pressure readings (e.g. 'hPa').",
+        )
 
-    async def _fetch_sensor_data_async(self, url, headers, sensor_name):
+    def __init__(self) -> None:
+        # Instance configuration container
+        self.valves = self.Valves()
+
+    # -------------------------
+    # Helper methods
+    # -------------------------
+    def _build_headers(self) -> Dict[str, str]:
+        """Create HTTP headers for Home Assistant API calls."""
+        return {"Authorization": f"Bearer {self.valves.HA_API_TOKEN}"}
+
+    def _get_sensor_url(self, sensor_name: str) -> str:
+        """Return the full API URL for a given sensor name."""
+        return f"{self.valves.HA_URL.rstrip('/')}/api/states/{sensor_name}"
+
+    def _parse_datetime(self, dt_value: str, tz_name: str) -> str:
+        """
+        Parse a datetime-like string and attach timezone info.
+        Returns ISO formatted string on success, original value on failure.
+        Handles common formats and ISO strings.
+        """
+        if not dt_value or not isinstance(dt_value, str):
+            return dt_value
+
+        tz = ZoneInfo(tz_name)
+        s = dt_value.replace(",", "").strip()
+        # Try common formats in order
+        parse_attempts = [
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M",
+        ]
+        for fmt in parse_attempts:
+            try:
+                dt = datetime.strptime(s, fmt)
+                dt = dt.replace(tzinfo=tz)
+                return dt.isoformat()
+            except ValueError:
+                continue
+
+        # Last resort: try fromisoformat (handles offsets) and ensure tz
+        try:
+            dt = datetime.fromisoformat(s)
+            # attach timezone if naive
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=tz)
+            return dt.isoformat()
+        except Exception as e:
+            logger.debug("Datetime parsing failed for '%s': %s", s, e)
+            # return original string if parsing fails
+            return dt_value
+
+    def _localize_forecast_times(self, forecast_list: List[Dict[str, Any]], timezone_str: str) -> List[Dict[str, Any]]:
+        """
+        Attach timezone info to all datetime-like fields in a forecast list.
+        Modifies the list in place and returns it for convenience.
+        """
+        if not isinstance(forecast_list, list):
+            return forecast_list
+
+        for entry in forecast_list:
+            # Check common keys that Home Assistant uses
+            for key in ("datetime", "time", "datetime_utc", "timestamp"):
+                if key in entry and isinstance(entry[key], str):
+                    entry[key] = self._parse_datetime(entry[key], timezone_str)
+        return forecast_list
+
+    def _format_value_with_unit(self, value: Any, unit: str) -> Optional[str]:
+        """Return a string with the value concatenated with unit, or None if value is None."""
+        if value is None:
+            return None
+        # Keep simple formatting: use Python's default string conversion
+        try:
+            return f"{value}{unit}"
+        except Exception:
+            return str(value)
+
+    # -------------------------
+    # Networking
+    # -------------------------
+    async def _fetch_sensor_data_async(self, url: str, headers: Dict[str, str], sensor_name: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """
         Asynchronously fetch sensor data from Home Assistant API.
-
-        Args:
-            url (_type_): URL of the Home Assistant API endpoint for the sensor.
-            headers (_type_): Headers for the API request, including authorization.
-            sensor_name (_type_): Name of the sensor to fetch data for.
-
-        Returns:
-            _type_: _description_
+        Returns tuple: (data_dict_or_None, error_message_or_None)
         """
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(url, headers=headers)
-            if response.status_code != 200:
-                return (
-                    None,
-                    f"Sensor '{sensor_name}' not found or API error (status {response.status_code}).",
-                )
-            try:
-                return response.json(), None
-            except Exception:
-                return None, f"Invalid JSON from sensor '{sensor_name}'."
         except Exception as e:
             return None, f"Network error fetching '{sensor_name}': {str(e)}"
 
-    def _localize_forecast_times(self, forecast_list, timezone_str):
-        """Attach timezone info to all datetime fields in a forecast list."""
-        from zoneinfo import ZoneInfo
-        from datetime import datetime
+        if response.status_code != 200:
+            return None, f"Sensor '{sensor_name}' not found or API error (status {response.status_code})."
 
-        tz = ZoneInfo(timezone_str)
-        for entry in forecast_list:
-            # Home Assistant usually uses "datetime" or "time" keys
-            for key in ["datetime", "time"]:
-                if key in entry and isinstance(entry[key], str):
-                    dt_str = entry[key].replace(",", "").strip()
-                    try:
-                        # Try parsing as "YYYY-MM-DD HH:MM" or ISO
-                        try:
-                            dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-                        except ValueError:
-                            dt = datetime.fromisoformat(dt_str)
-                        dt = dt.replace(tzinfo=tz)
-                        entry[key] = dt.isoformat()
-                    except Exception as e:
-                        logging.warning(
-                            f"Could not parse or encode timezone for forecast {key}: {e}"
-                        )
-        return forecast_list
+        try:
+            return response.json(), None
+        except Exception as e:
+            return None, f"Invalid JSON from sensor '{sensor_name}': {e}"
 
+    # -------------------------
+    # Public API
+    # -------------------------
     async def get_current_weather_forecast_async(self) -> str:
         """
-        Asynchronously get the current weather forecast from home assistant.
+        Asynchronously fetch and return a combined weather payload as a JSON string.
+        The payload includes current readings, ranges, and hourly/daily forecasts.
+
         Returns:
-            str: JSON string containing the current weather forecast data.
+            JSON string (on error returns {"error": "..."} as JSON string).
         """
         v = self.valves
 
+        # Validate basic config
         if not v.HA_URL:
             return json.dumps({"error": "HA_URL is not set."})
         if not v.HA_API_TOKEN:
             return json.dumps({"error": "HA_API_TOKEN is not set."})
 
-        headers = {"Authorization": f"Bearer {v.HA_API_TOKEN}"}
+        headers = self._build_headers()
+
+        # Sensors we expect to query
         sensor_names = {
             "hourly_forecast": v.HA_HOURLY_FORECAST_SENSOR_NAME,
             "daily_forecast": v.HA_DAILY_FORECAST_SENSOR_NAME,
@@ -141,79 +212,50 @@ class Tools:
             "current_date_time": v.HA_CURRENT_DATE_TIME_SENSOR_NAME,
         }
 
-        # Build a list of tasks to fetch sensor data asynchronously.
+        # Ensure all sensor names configured
+        missing = [k for k, name in sensor_names.items() if not name]
+        if missing:
+            return json.dumps({"error": f"Sensor name(s) not set for: {', '.join(missing)}"})
+
+        # Build tasks preserving key order for mapping results
+        keys = []
         tasks = []
         for key, name in sensor_names.items():
-            if not name:
-                return json.dumps({"error": f"Sensor name for '{key}' is not set."})
-            url = f"{v.HA_URL}/api/states/{name}"
-            tasks.append(self._fetch_sensor_data_async(url, headers, name))
+            keys.append(key)
+            tasks.append(self._fetch_sensor_data_async(self._get_sensor_url(name), headers, name))
 
-        # Use asyncio.gather to run all tasks concurrently.
+        # Run tasks concurrently
         results = await asyncio.gather(*tasks)
-        data = {}
-        # Enumerate through the results and handle errors.
-        for (key, _), (d, err) in zip(sensor_names.items(), results):
+
+        # Map results into a dict keyed by sensor role
+        data: Dict[str, Any] = {}
+        for key, (d, err) in zip(keys, results):
             if err:
-                logging.error(f"Error fetching {key}: {err}")
+                logger.error("Error fetching %s: %s", key, err)
                 return json.dumps({"error": err})
             data[key] = d
 
+        # Extract attributes safely
         try:
-            # Check if all required keys are present in the data.
-            for key in [
-                "hourly_forecast",
-                "daily_forecast",
-                "current",
-                "current_range",
-                "current_date_time",
-            ]:
-                if data.get(key) is None:
-                    return json.dumps(
-                        {"error": f"No data returned for '{key}' sensor."}
-                    )
-
-            hourly_forecast = (
-                data["hourly_forecast"].get("attributes", {}).get("forecast", [])
-            )
-            daily_forecast = (
-                data["daily_forecast"].get("attributes", {}).get("forecast", [])
-            )
-            current = data["current"].get("attributes", {})
-            current_range = data["current_range"].get("attributes", {})
+            hourly_forecast = (data["hourly_forecast"].get("attributes", {}) or {}).get("forecast", [])
+            daily_forecast = (data["daily_forecast"].get("attributes", {}) or {}).get("forecast", [])
+            current = (data["current"].get("attributes", {}) or {})
+            current_range = (data["current_range"].get("attributes", {}) or {})
             current_date_time_str = data["current_date_time"].get("state")
-
-            # --- Robust date parsing and timezone encoding ---
-            current_date_time = current_date_time_str  # fallback
-            if current_date_time_str:
-                try:
-                    # Remove comma and extra spaces
-                    dt_str = current_date_time_str.replace(",", "").strip()
-                    # Try parsing as "YYYY-MM-DD HH:MM"
-                    dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
-                    # Attach timezone
-                    dt = dt.replace(tzinfo=ZoneInfo(v.HA_TIMEZONE))
-                    current_date_time = dt.isoformat()
-                except Exception as e:
-                    logging.warning(
-                        f"Could not parse or encode timezone for current_date_time: {e}"
-                    )
-                    current_date_time = current_date_time_str
-            # --- end robust date parsing ---
-
-            # Localize forecast datetimes
-            hourly_forecast = self._localize_forecast_times(
-                hourly_forecast, v.HA_TIMEZONE
-            )
-            daily_forecast = self._localize_forecast_times(
-                daily_forecast, v.HA_TIMEZONE
-            )
-
-        except Exception as e:  # Catch any exception during attribute extraction
-            logging.exception("Error extracting attributes")
+        except Exception as e:
+            logger.exception("Error extracting attributes")
             return json.dumps({"error": f"Error extracting attributes: {str(e)}"})
 
-        # Validate the structure of the forecast data
+        # Parse current datetime robustly and attach timezone
+        current_date_time = current_date_time_str
+        if current_date_time_str:
+            current_date_time = self._parse_datetime(current_date_time_str, v.HA_TIMEZONE)
+
+        # Localize forecast times
+        hourly_forecast = self._localize_forecast_times(hourly_forecast, v.HA_TIMEZONE)
+        daily_forecast = self._localize_forecast_times(daily_forecast, v.HA_TIMEZONE)
+
+        # Validate forecasts
         if not hourly_forecast:
             return json.dumps({"error": "No hourly forecast data available."})
         if not daily_forecast:
@@ -225,26 +267,30 @@ class Tools:
             "current_location": v.HA_LOCATION,
             "current_weather": {
                 "temperatures": {
-                    "temperature": current.get("temperature"),
-                    "temperature_high": current_range.get("max_temperature"),
-                    "temperature_low": current_range.get("min_temperature"),
+                    # Values concatenated with configured temperature unit
+                    "current_temperature": self._format_value_with_unit(current.get("temperature"), v.HA_TEMPERATURE_UNIT),
+                    "temperature_high": self._format_value_with_unit(current_range.get("max_temperature"), v.HA_TEMPERATURE_UNIT),
+                    "temperature_low": self._format_value_with_unit(current_range.get("min_temperature"), v.HA_TEMPERATURE_UNIT),
                 },
                 "humidities": {
-                    "humidity": current.get("humidity"),
-                    "humidity_high": current_range.get("max_humidity"),
-                    "humidity_low": current_range.get("min_humidity"),
+                    # Values concatenated with configured humidity unit
+                    "humidity": self._format_value_with_unit(current.get("humidity"), v.HA_HUMIDITY_UNIT),
+                    "humidity_high": self._format_value_with_unit(current_range.get("max_humidity"), v.HA_HUMIDITY_UNIT),
+                    "humidity_low": self._format_value_with_unit(current_range.get("min_humidity"), v.HA_HUMIDITY_UNIT),
                 },
                 "pressures": {
-                    "pressure": current.get("pressure"),
-                    "pressure_high": current_range.get("max_pressure"),
-                    "pressure_low": current_range.get("min_pressure"),
+                    # Values concatenated with configured pressure unit
+                    "pressure": self._format_value_with_unit(current.get("pressure"), v.HA_PRESSURE_UNIT),
+                    "pressure_high": self._format_value_with_unit(current_range.get("max_pressure"), v.HA_PRESSURE_UNIT),
+                    "pressure_low": self._format_value_with_unit(current_range.get("min_pressure"), v.HA_PRESSURE_UNIT),
                 },
-                "lux": current.get("lx")
+                "lux": current.get("lx"),
             },
             "weather_forecasts": {
-                    "hourly_forecast": hourly_forecast,
-                    "daily_forecast": daily_forecast,
+                "hourly_forecast": hourly_forecast,
+                "daily_forecast": daily_forecast,
             },
         }
 
-        return json.dumps(result, indent=None, ensure_ascii=True)
+        # Compact JSON string output
+        return json.dumps(result, separators=(",", ":"), ensure_ascii=True)
