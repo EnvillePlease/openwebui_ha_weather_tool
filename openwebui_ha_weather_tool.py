@@ -2,7 +2,7 @@
 # Script Name : openwebui_ha_weather_tool.py
 # Author      : Clark Nelson
 # Company     : CNSoft OnLine
-# Version     : 1.0.5
+# Version     : 1.0.6
 # -----------------------------------------------------------------------------
 
 import os
@@ -58,7 +58,11 @@ class Tools:
             default="Europe/London",
             description="Home Assistant timezone, used for formatting dates and times in the weather data.",
         )
-
+        HA_LOCATION: str = Field(
+            default="96 Pooley View, Polesworth, Warwickshire, UK",
+            description="Home Assistant location, used for displaying the weather data.",
+        )
+        
     def __init__(self):
         self.valves = self.Valves()
         pass
@@ -218,6 +222,7 @@ class Tools:
         result = {
             "current_date_time": current_date_time,
             "current_timezone": v.HA_TIMEZONE,
+            "current_location": v.HA_LOCATION,
             "current_weather": {
                 "temperatures": {
                     "temperature": current.get("temperature"),
@@ -234,11 +239,11 @@ class Tools:
                     "pressure_high": current_range.get("max_pressure"),
                     "pressure_low": current_range.get("min_pressure"),
                 },
-                "lux": current.get("lx"),
-                "forecast": {
+                "lux": current.get("lx")
+            },
+            "weather_forecasts": {
                     "hourly_forecast": hourly_forecast,
                     "daily_forecast": daily_forecast,
-                },
             },
         }
 
